@@ -1,0 +1,110 @@
+import requests
+import time
+from urllib.parse import urlparse, parse_qs
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+from X import send_get_request
+
+
+current_directory = os.path.dirname(os.path.abspath(__file__))
+
+
+def read_txt(file_path):
+    paths = os.path.join(current_directory, file_path)
+    with open(paths, 'r') as file:
+        return [line.strip() for line in file.readlines() if line.strip()]
+
+
+def read_json_file(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            return data
+    except Exception as e:
+        print(f"读取 JSON 文件失败: {e}")
+        return None
+
+
+class QuestTaskHandler:
+    def __init__(self, auth_token, cookies, proxy_url=None):
+        self.auth_token = auth_token
+        self.headers = {
+            "Accept": "*/*",
+            "Authorization": f"Bearer {self.auth_token}",
+            "Content-Type": "application/json",
+            "Cookie": cookies,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+        }
+        self.proxies = {
+            "http": proxy_url,
+            "https": proxy_url
+        } if proxy_url else None
+
+    def _send_post_request(self, url, payload):
+        try:
+            response = requests.post(
+                url,
+                headers=self.headers,
+                json=payload,
+                proxies=self.proxies
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            print(f"请求失败: {e}")
+            return None
+
+    def process_tasks(self, cdn_data, jichu_data):
+        for partner in cdn_data['data']:
+            for task in partner['tasks']:
+                url = "https://quest.redactedairways.com/ecom-gateway/partnerActivity"
+                payload = {"partnerId": partner['_id'], "taskType": task['task_type']}
+                self._send_post_request(url, payload)
+                print(f"{partner['partner_name']}任务完成: {task['task_type']}")
+                time.sleep(1)
+
+        for task in jichu_data['list']:
+            task_action = task['task_action']
+            if task_action == 'like':
+                url = "https://quest.redactedairways.com/ecom-gateway/task/like"
+                payload = {"taskId": task['_id'], "tweetId": task['tweet_id']}
+                self._send_post_request(url, payload)
+            elif task_action == 'retweet':
+                url = "https://quest.redactedairways.com/ecom-gateway/task/retweet"
+                payload = {"taskId": task['_id'], "tweetId": task['tweet_id']}
+                self._send_post_request(url, payload)
+            elif task_action == 'follow':
+                url = "https://quest.redactedairways.com/ecom-gateway/task/follow"
+                payload = {"taskId": task['_id'], "twitterId": task['twitter_id']}
+                self._send_post_request(url, payload)
+            print(f"任务完成: {task_action} - {task['_id']}")
+
+
+def execute_task(auth_token, cookies, proxy_url, cdn_data, jichu_data):
+    task_handler = QuestTaskHandler(auth_token, cookies, proxy_url)
+    task_handler.process_tasks(cdn_data, jichu_data)
+
+
+if __name__ == "__main__":
+    # 配置代理和授权令牌
+    proxy_urls = read_txt("proxies.txt")[134:]  # 读取代理列表
+    tokens = read_txt("推特TOKEN.txt")[34:150]  # 读取授权令牌列表
+    cookies = "_ga=GA1.1.1718485006.1731828133; _ga_79MVPN70LJ=GS1.1.1731832087.2.1.1731834868.0.0.0"
+
+    # 读取任务数据
+    cdn_data = read_json_file('cdn.json')
+    jichu_data = read_json_file('jichu.json')
+
+    # 使用线程池并发执行
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = []
+        for token, proxy in zip(tokens, proxy_urls):
+            auth_token = send_get_request(token)['token']  # 示例 Token
+            futures.append(executor.submit(execute_task, auth_token, cookies, proxy, cdn_data, jichu_data))
+
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"任务执行时发生错误: {e}")
